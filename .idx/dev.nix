@@ -1,65 +1,45 @@
 { pkgs, ... }:
 
 {
-  name = "zun-server-env";
+  name = "zun-treo";
 
   packages = with pkgs; [
-    docker
-    docker-compose
-    tailscale
-    nodejs_20
-    curl
-    git
     bash
-    openssh
-    findutils
-    coreutils
-    gnused
-    gawk
-    procps
-    vim
-    htop
-    netcat
-    jq
+    curl
     wget
-    unzip
-    python3
+    git
     screen
     xdotool
     wmctrl
-    chromium  # trình duyệt để mở link IDX
+    chromium
+    docker-client
   ];
 
-  services.docker = {
-    enable = true;
-    autoStart = true;
-  };
-
-  env = {
-    DOCKER_HOST = "unix:///var/run/docker.sock";
-  };
-
   scripts = {
-    # Dọn dẹp host
-    cleanup-host = ''
-      if [ ! -f "$HOME/.cleanup_done" ]; then
-        rm -rf "$HOME/.gradle" "$HOME/.emu" 2>/dev/null || true
-        find "$HOME" -mindepth 1 -maxdepth 1 ! -name 'idx-ubuntu22-gui' ! -name '.*' -exec rm -rf {} + 2>/dev/null || true
-        touch "$HOME/.cleanup_done"
-        echo "✅ Dọn dẹp host hoàn tất."
+    # ---------- Dọn dẹp host, giải phóng dung lượng ----------
+    cleanup = ''
+      echo "🧹 Dọn dẹp các file rác và container cũ..."
+      docker rm -f Zun-Server 2>/dev/null || true
+      rm -rf ~/.docker ~/.gradle ~/.cache ~/.npm ~/.local/share/containers 2>/dev/null || true
+      echo "✅ Đã xóa container và các file tạm. Dung lượng đã được giải phóng."
+    '';
+
+    # ---------- Cài Docker nếu chưa có ----------
+    setup-docker = ''
+      if ! command -v docker &> /dev/null; then
+        echo "📦 Cài Docker..."
+        sudo apt update && sudo apt install -y docker.io
+        sudo usermod -aG docker $USER
+        echo "✅ Docker đã sẵn sàng. (Có thể cần đăng xuất lại hoặc chạy 'newgrp docker')"
       else
-        echo "⏭️ Host đã được dọn trước đó."
+        echo "✅ Docker đã có."
       fi
     '';
 
-    # Xóa container cũ
-    remove-container = ''
+    # ---------- Tạo container Zun-Server ----------
+    setup-container = ''
+      echo "🚀 Tạo container Zun-Server..."
       docker rm -f Zun-Server 2>/dev/null || true
-      echo "✅ Container đã xóa."
-    '';
-
-    # Tạo container
-    create-container = ''
       docker run -d --name Zun-Server \
         --restart always \
         --shm-size=2g \
@@ -72,61 +52,32 @@
       echo "✅ Container Zun-Server đã tạo."
     '';
 
-    # Cài Tailscale trong container
-    install-tailscale = ''
+    # ---------- Cài SSH, Tailscale, Chrome bên trong container ----------
+    install-services = ''
+      echo "🔧 Cài SSH, Tailscale, Chrome trong container..."
       docker exec Zun-Server bash -c '
-        apt update -qq && apt install -y -qq curl &&
-        curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null &&
-        curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list &&
-        apt update -qq && apt install -y -qq tailscale
-      '
-      echo "✅ Tailscale đã cài trong container."
-    '';
+        apt update -qq
+        apt install -y -qq curl openssh-server wget gnupg
 
-    # Khởi động tailscaled
-    start-tailscaled = ''
-      docker exec Zun-Server bash -c '
-        mkdir -p /var/lib/tailscale
-        nohup tailscaled --state=/var/lib/tailscale/tailscaled.state > /var/log/tailscaled.log 2>&1 &
-        sleep 2
-      '
-      echo "✅ tailscaled đã khởi động."
-    '';
+        # Tailscale
+        curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+        curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list
+        apt update -qq
+        apt install -y -qq tailscale
 
-    # Đăng nhập Tailscale (thay AUTH_KEY bằng key thật)
-    tailscale-up = ''
-      AUTH_KEY="tskey-auth-hkLFsqw5jzS11CNTRL-HLGErV9ZdVP4bV1kuJfHVP6B1JsdC8t"
-      docker exec Zun-Server tailscale up --authkey=$AUTH_KEY --hostname=Zun-Server --accept-routes
-      docker exec Zun-Server tailscale status
-      echo "✅ Tailscale đã kết nối."
-    '';
-
-    # Cài SSH server
-    install-ssh = ''
-      docker exec Zun-Server bash -c '
-        apt update && apt install -y openssh-server &&
-        mkdir -p /var/run/sshd &&
-        echo "PermitRootLogin yes" >> /etc/ssh/sshd_config &&
-        echo "root:123456" | chpasswd &&
+        # SSH
+        mkdir -p /var/run/sshd
+        echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+        echo "root:123456" | chpasswd
         /usr/sbin/sshd
-      '
-      echo "✅ SSH server đã chạy trên cổng 22."
-    '';
 
-    # Cài Google Chrome
-    install-chrome = ''
-      docker exec Zun-Server bash -c '
-        apt update && apt install -y wget gnupg &&
-        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - &&
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list &&
-        apt update && apt install -y google-chrome-stable
-      '
-      echo "✅ Google Chrome đã cài sẵn."
-    '';
+        # Google Chrome
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list
+        apt update -qq
+        apt install -y -qq google-chrome-stable
 
-    # Tạo shortcut Chrome trên desktop
-    setup-desktop = ''
-      docker exec Zun-Server bash -c '
+        # Desktop shortcut
         mkdir -p /home/ubuntu/Desktop
         cat > /home/ubuntu/Desktop/chrome.desktop <<EOF
 [Desktop Entry]
@@ -138,14 +89,28 @@ EOF
         chmod +x /home/ubuntu/Desktop/chrome.desktop
         chown -R ubuntu:ubuntu /home/ubuntu/Desktop 2>/dev/null || true
       '
-      echo "✅ Desktop đã sẵn sàng (truy cập http://localhost:8080, pass: 123456)."
+      echo "✅ Dịch vụ đã cài."
     '';
 
-    # Script treo IDX (tạo file ~/auto_treo.sh)
+    # ---------- Khởi động tailscaled và kết nối (yêu cầu nhập auth key) ----------
+    start-tailscale = ''
+      echo "🐧 Khởi động tailscaled..."
+      docker exec Zun-Server bash -c '
+        mkdir -p /var/lib/tailscale
+        nohup tailscaled --state=/var/lib/tailscale/tailscaled.state > /var/log/tailscaled.log 2>&1 &
+        sleep 2
+      '
+      echo "✅ tailscaled đã chạy."
+      read -p "🔑 Nhập auth key Tailscale: " AUTH_KEY
+      docker exec Zun-Server tailscale up --authkey=$AUTH_KEY --hostname=Zun-Server --accept-routes
+      docker exec Zun-Server tailscale status
+      echo "✅ Tailscale đã kết nối."
+    '';
+
+    # ---------- Tạo script treo IDX (tự động giữ phiên) ----------
     install-treo = ''
       cat > ~/auto_treo.sh << 'EOF'
 #!/usr/bin/env bash
-
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
@@ -220,21 +185,16 @@ echo "Xem log keepalive: screen -r keepalive"
 echo "Xem log refresh: cat ~/auto_refresh.log"
 EOF
       chmod +x ~/auto_treo.sh
-      echo "✅ Script ~/auto_treo.sh đã sẵn sàng. Chạy nó bằng lệnh: ~/auto_treo.sh"
+      echo "✅ Script ~/auto_treo.sh đã sẵn sàng."
     '';
 
-    # Toàn bộ quy trình setup (chạy một lần)
+    # ---------- Chạy toàn bộ quy trình (1 lệnh duy nhất) ----------
     full-setup = ''
       echo "===== BẮT ĐẦU SETUP ====="
-      cleanup-host
-      remove-container
-      create-container
-      install-tailscale
-      start-tailscaled
-      tailscale-up
-      install-ssh
-      install-chrome
-      setup-desktop
+      setup-docker
+      setup-container
+      install-services
+      start-tailscale
       install-treo
       echo "===== SETUP HOÀN TẤT ====="
       echo "🔗 Truy cập desktop: http://localhost:8080 (pass: 123456)"
@@ -242,27 +202,24 @@ EOF
       echo "📌 Để treo IDX, chạy: ~/auto_treo.sh"
     '';
 
-    # Reset container (giữ lại các cài đặt)
+    # ---------- Xóa container cũ và tạo lại (giải phóng dung lượng) ----------
     reset-container = ''
-      remove-container
-      create-container
-      start-tailscaled
-      install-ssh
-      install-chrome
-      setup-desktop
-      echo "✅ Container reset xong (Tailscale sẽ tự kết nối lại nếu đã login)."
+      echo "🔄 Xóa container cũ để giải phóng ~16GB..."
+      docker rm -f Zun-Server 2>/dev/null || true
+      echo "✅ Đã xóa. Tạo container mới..."
+      setup-container
+      install-services
+      echo "✅ Container mới đã sẵn sàng."
     '';
 
-    # Kiểm tra trạng thái
+    # ---------- Kiểm tra trạng thái ----------
     status = ''
       docker ps -f name=Zun-Server
       echo ""
       docker exec Zun-Server tailscale status 2>/dev/null || echo "Tailscale chưa chạy"
-      echo ""
-      docker exec Zun-Server ps aux | grep -E "sshd|chrome" || true
     '';
 
-    # Mở shell vào container
+    # ---------- Mở shell vào container ----------
     enter = "docker exec -it Zun-Server bash";
   };
 }
