@@ -1,24 +1,15 @@
 { pkgs, ... }:
-
 {
-  name = "zun-treo-base";
+  channel = "stable-24.11";
 
-  packages = with pkgs; [
-    bash
-    curl
-    wget
-    git
-    screen
-    xdotool
-    wmctrl
-    coreutils
-    procps
-    findutils
-    docker-client
+  packages = [
+    pkgs.bash
+    pkgs.coreutils
+    pkgs.findutils
+    pkgs.gnugrep
   ];
 
   scripts = {
-    # Dọn dẹp môi trường host (xoá các thư mục .gradle, .emu và các thư mục không cần thiết)
     cleanup = ''
       if [ ! -f "$HOME/.cleanup_done" ]; then
         rm -rf "$HOME/.gradle/"* "$HOME/.emu/"* 2>/dev/null || true
@@ -33,8 +24,5 @@
         echo "⏭️ Đã dọn dẹp trước đó."
       fi
     '';
-
-    # (Các script khác bạn có thể thêm vào, ví dụ setup-docker, setup-container, treo...)
-    # Chú ý: không nên tự động chạy khi build, hãy để người dùng gọi thủ công.
   };
 }
